@@ -59,27 +59,30 @@ function App() {
     const endpoint = () =>
         host() !== undefined && port() !== undefined ? `ws://${host()}:${port()}/api/ws` : undefined;
 
-    const ws = createMemo((prevWs) => {
-        if (prevWs) {
-            prevWs.complete();
+    const ws = createMemo(
+        /** @param {WebSocketSubject<Blob> | undefined} prevWs */ (prevWs) => {
+            if (prevWs) {
+                prevWs.unsubscribe();
+                prevWs.complete();
+            }
+            const url = endpoint();
+            if (url) {
+                return webSocket({
+                    url,
+                    binaryType: "blob",
+                    deserializer: (e) => /** @type {Blob} */ (e.data),
+                });
+            }
+            return undefined;
         }
-        const url = endpoint();
-        if (url) {
-            return webSocket({
-                url,
-                binaryType: "blob",
-                deserializer: (e) => /** @type {Blob} */ (e.data),
-            });
-        }
-        return undefined;
-    });
+    );
 
     const [data, setData] = createSignal(/** @type {Map<Id, Gps>} */ (new Map()), {
         name: "data",
         equals: false,
     });
 
-    const [agentMarker, setAgentMarker] = createSignal(/** @type {maplibre.LngLat | undefined} */ (undefined));
+    const [agentMarker, setAgentMarker] = createSignal(/** @type {LngLatLike | undefined} */ (undefined));
 
     const [t, setT] = createSignal(0);
 
@@ -98,7 +101,7 @@ function App() {
 
         const interpolated = lerpGps(first, second, t());
 
-        setAgentMarker(new maplibre.LngLat(interpolated.longitude, interpolated.latitude));
+        setAgentMarker({ lng: interpolated.longitude, lat: interpolated.latitude });
         setT((prev) => {
             let next = prev + 0.1;
             if (next >= 1) {

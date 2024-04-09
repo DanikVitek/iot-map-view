@@ -77,21 +77,21 @@ function App() {
         }
     );
 
-    const [data, setData] = createSignal(/** @type {Map<Id, Gps>} */ (new Map()), {
+    const [data, setData] = createSignal(/** @type {Map<Id, { gps: Gps, road_state: RoadState }>} */ (new Map()), {
         name: "data",
         equals: false,
     });
 
-    const [agentMarker, setAgentMarker] = createSignal(/** @type {LngLatLike | undefined} */ (undefined));
+    const [agentMarker, setAgentMarker] = createSignal(/** @type {[LngLatLike, RoadState] | undefined} */ (undefined));
 
     const [t, setT] = createSignal(0);
 
     setInterval(() => {
         // lerp between first two stored points and set agentMarker. When current lerp is finished, remove the first point.
 
-        const pointsIter = data().entries();
-        const firstResult = pointsIter.next();
-        const secondResult = pointsIter.next();
+        const dataIter = data().entries();
+        const firstResult = dataIter.next();
+        const secondResult = dataIter.next();
         if (firstResult.done || secondResult.done) {
             return;
         }
@@ -99,9 +99,9 @@ function App() {
         const [firstId, first] = firstResult.value;
         const [, second] = secondResult.value;
 
-        const interpolated = lerpGps(first, second, t());
+        const interpolated = lerpGps(first.gps, second.gps, t());
 
-        setAgentMarker({ lng: interpolated.longitude, lat: interpolated.latitude });
+        setAgentMarker([{ lng: interpolated.longitude, lat: interpolated.latitude }, first.road_state]);
         setT((prev) => {
             let next = prev + 0.1;
             if (next >= 1) {
@@ -133,10 +133,16 @@ function App() {
                                         setData((prev) => {
                                             if (Array.isArray(data.id)) {
                                                 for (let i = 0; i < data.id.length; i++) {
-                                                    prev.set(data.id[i], data.data[i].gps);
+                                                    prev.set(data.id[i], {
+                                                        gps: data.data[i].gps,
+                                                        road_state: data.data[i].road_state,
+                                                    });
                                                 }
                                             } else {
-                                                prev.set(data.id, data.data.gps);
+                                                prev.set(data.id, {
+                                                    gps: data.data.gps,
+                                                    road_state: data.data.road_state,
+                                                });
                                             }
                                             return prev;
                                         });
@@ -183,7 +189,21 @@ function App() {
                 viewport={viewport()}
                 onViewportChange={setViewport}
             >
-                <Show when={agentMarker()}>{(lngLat) => <Marker lngLat={lngLat()}>Hi there!</Marker>}</Show>
+                <Show when={agentMarker()}>
+                    {(lngLat) => (
+                        <Marker lngLat={lngLat()[0]} showPopup={true}>
+                            <span
+                                class="font-semibold"
+                                classList={{
+                                    "text-success": lngLat()[1] === "SMOOTH",
+                                    "text-error": lngLat()[1] === "ROUGH",
+                                }}
+                            >
+                                {lngLat()[1]}
+                            </span>
+                        </Marker>
+                    )}
+                </Show>
                 <form
                     class="form-control absolute left-5 top-5 grid grid-cols-2 grid-rows-3 gap-2 rounded-md bg-primary p-2"
                     onSubmit={(e) => {

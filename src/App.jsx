@@ -103,7 +103,7 @@ function App() {
                                         });
                                         break;
                                     case "update":
-                                        setPoints((prev) => {
+                                        setData((prev) => {
                                             for (let i = 0; i < data.id.length; i++) {
                                                 prev.set(data.id[i], data.data[i].gps);
                                             }

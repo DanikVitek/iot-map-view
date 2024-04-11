@@ -4,52 +4,13 @@ import MapGL, { Marker } from "solid-map-gl";
 import * as maplibre from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import mapboxgl from "mapbox-gl";
-
-/**
- * @typedef {mapboxgl.LngLatLike} LngLatLike
- * @typedef {import('solid-map-gl').Viewport & {center?: LngLatLike}} Viewport
- * */
-/**
- * @template T
- * @typedef {import('solid-js').Accessor<T>} Accessor<T>
- * @typedef {import('solid-js').Setter<T>} Setter<T>
- * @typedef {import('solid-js').Signal<T>} Signal<T>
- * @typedef {import('rxjs/webSocket').WebSocketSubject<T>} WebSocketSubject<T>
- */
-/**
- * @typedef {number} Id
- * @typedef {{ x: number, y: number, z: number }} Accelerometer
- * @typedef {{ latitude: number, longitude: number }} Gps
- * @typedef {"SMOOTH" | "ROUGH"} RoadState
- * @typedef {{
- *      accelerometer: Accelerometer,
- *      gps: Gps,
- *      road_state: RoadState,
- *      timestamp: string,
- * }} Data
- * @typedef {{
- *      kind: "new" | "update",
- *      id: Id,
- *      data: Data,
- *  } | {
- *      kind: "new" | "update",
- *      id: Id[],
- *      data: Data[],
- *  } | {
- *      kind: "delete",
- *      id: Id[] | Id,
- *      data_type: string,
- *  }} Message
- */
-
-/** @type {LngLatLike} */
-const center = { lat: 30.52013606276688, lng: 50.45045314605352 };
+import car from "./assets/car.png";
 
 /** @returns {JSX.Element} */
 function App() {
     const [viewport, setViewport] = createSignal(
         /** @satisfies {Viewport} */ ({
-            center,
+            center: { lat: 30.52013606276688, lng: 50.45045314605352 },
             zoom: 15,
         })
     );
@@ -165,17 +126,23 @@ function App() {
                     error: (err) => {
                         console.error({ err });
                         if (err instanceof CloseEvent) {
-                            setData(new Map());
+                            setData((prev) => {
+                                prev.clear();
+                                return prev;
+                            });
+                            setAgentMarker(undefined);
                         }
                     },
-                    complete: () => {
-                        console.log("complete");
-                    },
+                    complete: () => console.log("complete"),
                 });
             }
         },
         undefined,
         { name: "ws.subscribe" }
+    );
+
+    const [style, setStyle] = createSignal(
+        "https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj"
     );
 
     return (
@@ -184,24 +151,32 @@ function App() {
                 class="absolute inset-0 -z-[1]"
                 mapLib={maplibre}
                 options={{
-                    style: "https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj",
+                    style: style(),
                 }}
                 viewport={viewport()}
                 onViewportChange={setViewport}
             >
                 <Show when={agentMarker()}>
                     {(lngLat) => (
-                        <Marker lngLat={lngLat()[0]} showPopup={true}>
-                            <span
-                                class="font-semibold"
-                                classList={{
-                                    "text-success": lngLat()[1] === "SMOOTH",
-                                    "text-error": lngLat()[1] === "ROUGH",
+                        <>
+                            <Marker
+                                lngLat={lngLat()[0]}
+                                options={{
+                                    element: <img src={car} width={40} height={63} />,
+                                    offset: [0, -31],
                                 }}
                             >
-                                {lngLat()[1]}
-                            </span>
-                        </Marker>
+                                {/* <span
+                                    class="font-semibold"
+                                    classList={{
+                                        "text-success": lngLat()[1] === "SMOOTH",
+                                        "text-error": lngLat()[1] === "ROUGH",
+                                    }}
+                                >
+                                    {lngLat()[1]}
+                                </span> */}
+                            </Marker>
+                        </>
                     )}
                 </Show>
                 <form
@@ -238,13 +213,33 @@ function App() {
                     />
                 </form>
 
-                <div class="absolute right-5 top-5 w-fit min-w-10 rounded-md bg-neutral p-2 text-center text-neutral-content">
-                    {data().size}
+                <div class="absolute right-5 top-5 w-fit min-w-10">
+                    <select
+                        class="select select-bordered select-primary rounded-md border-2"
+                        onChange={(e) => setStyle(e.target.value)}
+                    >
+                        <option
+                            selected
+                            value="https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj"
+                        >
+                            OpenStreetMap
+                        </option>
+                        <option value="https://api.maptiler.com/maps/topo-v2/style.json?key=dtDYVdcJneIL6GQ3ReDj">
+                            Topo v2
+                        </option>
+                        <option value="https://api.maptiler.com/maps/satellite/style.json?key=dtDYVdcJneIL6GQ3ReDj">
+                            Satellite
+                        </option>
+                    </select>
                 </div>
 
                 <div class="absolute bottom-5 left-5 h-fit w-fit rounded-md bg-neutral p-2">
                     <table class="table table-sm w-64 table-auto text-neutral-content">
                         <tbody>
+                            <tr>
+                                <th scope="row">Points</th>
+                                <td>{data().size}</td>
+                            </tr>
                             <tr>
                                 <th scope="row">Longitude</th>
                                 <td>{viewport().center?.lng}</td>

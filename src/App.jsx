@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Index, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { webSocket } from "rxjs/webSocket";
 import MapGL, { Marker } from "solid-map-gl";
 import * as maplibre from "maplibre-gl";
@@ -65,17 +65,14 @@ const INITIAL_VIEWPORT = /** @type {const} @satisfies {Viewport} */ ({
 //#region App
 /** @returns {JSXElement} */
 function App() {
-    const [viewport, setViewport] = createSignal(INITIAL_VIEWPORT);
-
     const [host, setHost] = createSignal(/** @type {string | undefined} */ (undefined));
     const [port, setPort] = createSignal(/** @type {number | undefined} */ (undefined));
     const endpoint = () =>
-        host() !== undefined && port() !== undefined ? `ws://${host()}:${port()}/api/ws` : undefined;
+        host() === undefined || port() === undefined ? undefined : `ws://${host()}:${port()}/api/ws`;
 
     const ws = createMemo(
         /** @param {WebSocketSubject<Blob> | undefined} prevWs */ (prevWs) => {
             if (prevWs) {
-                prevWs.unsubscribe();
                 prevWs.complete();
             }
             const url = endpoint();
@@ -90,15 +87,89 @@ function App() {
         }
     );
 
-    const [data, setData] = createSignal(/** @type {Map<Id, { gps: Gps, road_state: RoadState }>} */ (new Map()), {
+    /** @typedef {{gps: Gps, road_state: RoadState}} Loc */
+
+    /**
+     * @function
+     * @param {Message} msg
+     * @param {Map<Id, Loc>} prev
+     * @returns {Map<Id, Loc>}
+     */
+    const processMessage = (msg, prev) => {
+        switch (msg.kind) {
+            case "new":
+            case "update":
+                if (Array.isArray(msg.id)) {
+                    for (let i = 0; i < msg.id.length; i++) {
+                        prev.set(msg.id[i], {
+                            gps: /** @type {Data[]} */ (msg.data)[i].gps,
+                            road_state: /** @type {Data[]} */ (msg.data)[i].road_state,
+                        });
+                    }
+                } else {
+                    prev.set(msg.id, {
+                        gps: /** @type {Data} */ (msg.data).gps,
+                        road_state: /** @type {Data} */ (msg.data).road_state,
+                    });
+                }
+                return prev;
+
+            case "delete":
+                if (Array.isArray(msg.id)) {
+                    for (let i = 0; i < msg.id.length; i++) {
+                        prev.delete(msg.id[i]);
+                    }
+                } else {
+                    prev.delete(msg.id);
+                }
+                return prev;
+        }
+    };
+
+    const [data, setData] = createSignal(/** @type {Map<Id, Loc>} */ (new Map()), {
         name: "data",
         equals: false,
     });
 
+    //#region Subscribe to WebSocket
+    createEffect(
+        () => {
+            const subject = ws();
+            if (subject) {
+                subject.subscribe({
+                    next: (data) => {
+                        data.text()
+                            .then((json) => /** @type {Message} */ (JSON.parse(json)))
+                            .then((msg) => {
+                                setData((prev) => processMessage(msg, prev));
+                            })
+                            .catch((err) => console.error({ err }));
+                    },
+                    error: (err) => {
+                        if (err instanceof CloseEvent) {
+                            console.log("WebSocket closed", err);
+                            setData((prev) => {
+                                prev.clear();
+                                return prev;
+                            });
+                            setAgentMarker(undefined);
+                        } else {
+                            console.error({ err });
+                        }
+                    },
+                    complete: () => console.log("complete"),
+                });
+            }
+        },
+        undefined,
+        { name: "ws.subscribe" }
+    );
+    //#endregion
+
     //#region Agent marker logic
     const [agentMarker, setAgentMarker] = createSignal(/** @type {[LngLatLike, RoadState] | undefined} */ (undefined));
 
-    const [t, setT] = createSignal(0);
+    let t = 0;
 
     setInterval(() => {
         // lerp between first two stored points and set agentMarker. When current lerp is finished, remove the first point.
@@ -113,17 +184,14 @@ function App() {
         const [firstId, first] = firstResult.value;
         const [, second] = secondResult.value;
 
-        const interpolated = lerpGps(first.gps, second.gps, t());
+        const interpolated = lerpGps(first.gps, second.gps, t);
 
         setAgentMarker([{ lng: interpolated.longitude, lat: interpolated.latitude }, first.road_state]);
-        setT((prev) => {
-            let next = prev + 0.1;
-            if (next >= 1) {
-                next = 0;
-            }
-            return next;
-        });
-        if (t() === 0) {
+        t += 0.1;
+        if (t >= 1) {
+            t = 0;
+        }
+        if (t === 0) {
             setData((prev) => {
                 prev.delete(firstId);
                 return prev;
@@ -132,70 +200,7 @@ function App() {
     }, 9);
     //#endregion
 
-    //#region Subscribe to WebSocket
-    createEffect(
-        () => {
-            const subject = ws();
-            if (subject) {
-                subject.subscribe({
-                    next: (data) => {
-                        data.text()
-                            .then((json) => /** @type {Message} */ (JSON.parse(json)))
-                            .then((data) => {
-                                switch (data.kind) {
-                                    case "new":
-                                    case "update":
-                                        setData((prev) => {
-                                            if (Array.isArray(data.id)) {
-                                                for (let i = 0; i < data.id.length; i++) {
-                                                    prev.set(data.id[i], {
-                                                        gps: /** @type {Data[]} */ (data.data)[i].gps,
-                                                        road_state: /** @type {Data[]} */ (data.data)[i].road_state,
-                                                    });
-                                                }
-                                            } else {
-                                                prev.set(data.id, {
-                                                    gps: /** @type {Data} */ (data.data).gps,
-                                                    road_state: /** @type {Data} */ (data.data).road_state,
-                                                });
-                                            }
-                                            return prev;
-                                        });
-                                        break;
-                                    case "delete":
-                                        setData((prev) => {
-                                            if (Array.isArray(data.id)) {
-                                                for (let i = 0; i < data.id.length; i++) {
-                                                    prev.delete(data.id[i]);
-                                                }
-                                            } else {
-                                                prev.delete(data.id);
-                                            }
-                                            return prev;
-                                        });
-                                        break;
-                                }
-                            });
-                    },
-                    error: (err) => {
-                        console.error({ err });
-                        if (err instanceof CloseEvent) {
-                            setData((prev) => {
-                                prev.clear();
-                                return prev;
-                            });
-                            setAgentMarker(undefined);
-                        }
-                    },
-                    complete: () => console.log("complete"),
-                });
-            }
-        },
-        undefined,
-        { name: "ws.subscribe" }
-    );
-    //#endregion
-
+    const [viewport, setViewport] = createSignal(INITIAL_VIEWPORT);
     const [style, setStyle] = createSignal(OPEN_STREET_MAP);
 
     //#region App view
@@ -230,14 +235,14 @@ function App() {
 
                 <ConnectionForm class="absolute left-5 top-5 bg-primary" setHost={setHost} setPort={setPort} />
 
-                <MapStyleSelection
+                <MapStyleSelect
                     class="absolute right-5 top-5 w-fit min-w-10"
                     setStyle={setStyle}
-                    options={{
+                    options={Object.freeze({
                         OpenStreetMap: OPEN_STREET_MAP,
                         "Topo v2": TOPO_V2,
                         Satellite: SATELLITE,
-                    }}
+                    })}
                 />
 
                 <div class="absolute bottom-5 left-5 h-fit w-fit rounded-md bg-neutral p-2">
@@ -318,13 +323,17 @@ function ConnectionForm(props) {
  * }} props
  * @returns {JSXElement}
  */
-function MapStyleSelection(props) {
+function MapStyleSelect(props) {
     return (
         <select
             class={twMerge("select select-bordered select-primary rounded-md border-2", props.class)}
             onChange={(e) => props.setStyle(e.target.value)}
         >
-            <For each={Object.entries(props.options)}>{([name, value]) => <option value={value}>{name}</option>}</For>
+            {Object.entries(props.options).map(([name, value], index) => (
+                <option selected={index === 0} value={value}>
+                    {name}
+                </option>
+            ))}
         </select>
     );
 }

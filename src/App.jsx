@@ -1,5 +1,3 @@
-// @ts-check
-
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { webSocket } from "rxjs/webSocket";
 import MapGL, { Marker } from "solid-map-gl";

@@ -1,19 +1,71 @@
+// @ts-check
+
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { webSocket } from "rxjs/webSocket";
 import MapGL, { Marker } from "solid-map-gl";
 import * as maplibre from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import mapboxgl from "mapbox-gl";
 import car from "./assets/car.png";
 
-/** @returns {JSX.Element} */
+/** @typedef {import("solid-js").JSXElement} JSXElement */
+/**
+ * @typedef {mapboxgl.LngLatLike} LngLatLike
+ * @typedef {import('solid-map-gl').Viewport & {center?: LngLatLike}} Viewport
+ * */
+/**
+ * @template T
+ * @typedef {import('solid-js').Accessor<T>} Accessor<T>
+ */
+/**
+ * @template T
+ * @typedef {import('solid-js').Signal<T>} Signal<T>
+ */
+/**
+ * @template T
+ * @typedef {import('solid-js').Setter<T>} Setter<T>
+ */
+/**
+ * @template T
+ * @typedef {import('rxjs/webSocket').WebSocketSubject<T>} WebSocketSubject<T>
+ */
+/**
+ * @typedef {number} Id
+ * @typedef {{ x: number, y: number, z: number }} Accelerometer
+ * @typedef {{ latitude: number, longitude: number }} Gps
+ * @typedef {"SMOOTH" | "ROUGH"} RoadState
+ * @typedef {{
+ *      accelerometer: Accelerometer,
+ *      gps: Gps,
+ *      road_state: RoadState,
+ *      timestamp: string,
+ *  }} Data
+ * @typedef {{
+ *      kind: "new" | "update",
+ *      id: Id,
+ *      data: Data,
+ *  } | {
+ *      kind: "new" | "update",
+ *      id: Id[],
+ *      data: Data[],
+ *  } | {
+ *      kind: "delete",
+ *      id: Id[] | Id,
+ *      data_type: string,
+ *  }} Message
+ */
+
+const OPEN_STREET_MAP = "https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj";
+const TOPO_V2 = "https://api.maptiler.com/maps/topo-v2/style.json?key=dtDYVdcJneIL6GQ3ReDj";
+const SATELLITE = "https://api.maptiler.com/maps/satellite/style.json?key=dtDYVdcJneIL6GQ3ReDj";
+
+const INITIAL_VIEWPORT = /** @type {const} @satisfies {Viewport} */ ({
+    center: { lat: 30.52013606276688, lng: 50.45045314605352 },
+    zoom: 15,
+});
+
+/** @returns {JSXElement} */
 function App() {
-    const [viewport, setViewport] = createSignal(
-        /** @satisfies {Viewport} */ ({
-            center: { lat: 30.52013606276688, lng: 50.45045314605352 },
-            zoom: 15,
-        })
-    );
+    const [viewport, setViewport] = createSignal(INITIAL_VIEWPORT);
 
     const [host, setHost] = createSignal(/** @type {string | undefined} */ (undefined));
     const [port, setPort] = createSignal(/** @type {number | undefined} */ (undefined));
@@ -87,7 +139,6 @@ function App() {
                         data.text()
                             .then((json) => /** @type {Message} */ (JSON.parse(json)))
                             .then((data) => {
-                                // console.log(data);
                                 switch (data.kind) {
                                     case "new":
                                     case "update":
@@ -95,14 +146,14 @@ function App() {
                                             if (Array.isArray(data.id)) {
                                                 for (let i = 0; i < data.id.length; i++) {
                                                     prev.set(data.id[i], {
-                                                        gps: data.data[i].gps,
-                                                        road_state: data.data[i].road_state,
+                                                        gps: /** @type {Data[]} */ (data.data)[i].gps,
+                                                        road_state: /** @type {Data[]} */ (data.data)[i].road_state,
                                                     });
                                                 }
                                             } else {
                                                 prev.set(data.id, {
-                                                    gps: data.data.gps,
-                                                    road_state: data.data.road_state,
+                                                    gps: /** @type {Data} */ (data.data).gps,
+                                                    road_state: /** @type {Data} */ (data.data).road_state,
                                                 });
                                             }
                                             return prev;
@@ -141,9 +192,7 @@ function App() {
         { name: "ws.subscribe" }
     );
 
-    const [style, setStyle] = createSignal(
-        "https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj"
-    );
+    const [style, setStyle] = createSignal(OPEN_STREET_MAP);
 
     return (
         <main>
@@ -157,45 +206,43 @@ function App() {
                 onViewportChange={setViewport}
             >
                 <Show when={agentMarker()}>
-                    {(lngLat) => (
-                        <>
+                    {
+                        /**
+                         * @param {Accessor<[LngLatLike, RoadState]>} lngLat
+                         * @returns {JSXElement}
+                         */
+                        (lngLat) => (
                             <Marker
                                 lngLat={lngLat()[0]}
                                 options={{
-                                    element: <img src={car} width={40} height={63} />,
+                                    element: /** @type {HTMLImageElement} */ (<img src={car} width={40} height={63} />),
                                     offset: [0, -31],
                                 }}
-                            >
-                                {/* <span
-                                    class="font-semibold"
-                                    classList={{
-                                        "text-success": lngLat()[1] === "SMOOTH",
-                                        "text-error": lngLat()[1] === "ROUGH",
-                                    }}
-                                >
-                                    {lngLat()[1]}
-                                </span> */}
-                            </Marker>
-                        </>
-                    )}
+                            />
+                        )
+                    }
                 </Show>
                 <form
                     class="form-control absolute left-5 top-5 grid grid-cols-2 grid-rows-3 gap-2 rounded-md bg-primary p-2"
                     onSubmit={(e) => {
                         e.preventDefault();
-                        setHost(e.currentTarget.host.value ? e.currentTarget.host.value : "localhost");
-                        setPort(e.currentTarget.port.value ? e.currentTarget.port.value : 8080);
+                        /** @type {string | undefined} */
+                        const host = e.currentTarget.host.value;
+                        /** @type {number | undefined} */
+                        const port = e.currentTarget.port.value;
+                        setHost(host ? host : "localhost");
+                        setPort(port ? port : 8080);
                     }}
                 >
                     <label
-                        htmlFor="host"
+                        for="host"
                         class="input input-bordered input-primary col-span-2 flex items-center gap-2 text-primary-content"
                     >
                         Host:
                         <input id="host" class="grow" type="text" placeholder="localhost" />
                     </label>
                     <label
-                        htmlFor="port"
+                        for="port"
                         class="input input-bordered input-primary col-span-2 flex items-center gap-2 text-primary-content"
                     >
                         Port:
@@ -218,18 +265,11 @@ function App() {
                         class="select select-bordered select-primary rounded-md border-2"
                         onChange={(e) => setStyle(e.target.value)}
                     >
-                        <option
-                            selected
-                            value="https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj"
-                        >
+                        <option selected value={OPEN_STREET_MAP}>
                             OpenStreetMap
                         </option>
-                        <option value="https://api.maptiler.com/maps/topo-v2/style.json?key=dtDYVdcJneIL6GQ3ReDj">
-                            Topo v2
-                        </option>
-                        <option value="https://api.maptiler.com/maps/satellite/style.json?key=dtDYVdcJneIL6GQ3ReDj">
-                            Satellite
-                        </option>
+                        <option value={TOPO_V2}>Topo v2</option>
+                        <option value={SATELLITE}>Satellite</option>
                     </select>
                 </div>
 

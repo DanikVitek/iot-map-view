@@ -1,10 +1,12 @@
+// @ts-check
+
 /* @refresh reload */
 import { render } from "solid-js/web";
 
 import "./index.css";
 import App from "./App";
 
-/** @type {HTMLElement} */
+/** @type {HTMLElement | null} */
 const root = document.getElementById("root");
 
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -13,4 +15,4 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
     );
 }
 
-render(() => <App />, root);
+render(() => <App />, /** @type {HTMLElement} */ (root));

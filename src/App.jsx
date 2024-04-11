@@ -1,9 +1,10 @@
-import { Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { webSocket } from "rxjs/webSocket";
 import MapGL, { Marker } from "solid-map-gl";
 import * as maplibre from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import car from "./assets/car.png";
+import { twMerge } from "tailwind-merge";
 
 /** @typedef {import("solid-js").JSXElement} JSXElement */
 /**
@@ -61,6 +62,7 @@ const INITIAL_VIEWPORT = /** @type {const} @satisfies {Viewport} */ ({
     zoom: 15,
 });
 
+//#region App
 /** @returns {JSXElement} */
 function App() {
     const [viewport, setViewport] = createSignal(INITIAL_VIEWPORT);
@@ -93,6 +95,7 @@ function App() {
         equals: false,
     });
 
+    //#region Agent marker logic
     const [agentMarker, setAgentMarker] = createSignal(/** @type {[LngLatLike, RoadState] | undefined} */ (undefined));
 
     const [t, setT] = createSignal(0);
@@ -127,7 +130,9 @@ function App() {
             });
         }
     }, 9);
+    //#endregion
 
+    //#region Subscribe to WebSocket
     createEffect(
         () => {
             const subject = ws();
@@ -189,9 +194,11 @@ function App() {
         undefined,
         { name: "ws.subscribe" }
     );
+    //#endregion
 
     const [style, setStyle] = createSignal(OPEN_STREET_MAP);
 
+    //#region App view
     return (
         <main>
             <MapGL
@@ -220,85 +227,146 @@ function App() {
                         )
                     }
                 </Show>
-                <form
-                    class="form-control absolute left-5 top-5 grid grid-cols-2 grid-rows-3 gap-2 rounded-md bg-primary p-2"
-                    onSubmit={(e) => {
-                        e.preventDefault();
-                        /** @type {string | undefined} */
-                        const host = e.currentTarget.host.value;
-                        /** @type {number | undefined} */
-                        const port = e.currentTarget.port.value;
-                        setHost(host ? host : "localhost");
-                        setPort(port ? port : 8080);
-                    }}
-                >
-                    <label
-                        for="host"
-                        class="input input-bordered input-primary col-span-2 flex items-center gap-2 text-primary-content"
-                    >
-                        Host:
-                        <input id="host" class="grow" type="text" placeholder="localhost" />
-                    </label>
-                    <label
-                        for="port"
-                        class="input input-bordered input-primary col-span-2 flex items-center gap-2 text-primary-content"
-                    >
-                        Port:
-                        <input id="port" class="grow" type="number" min={1} max={65535} placeholder="8080" />
-                    </label>
-                    <input type="submit" class="btn btn-secondary col-span-1 text-secondary-content" value="Connect" />
-                    <input
-                        type="reset"
-                        class="btn btn-secondary col-span-1 text-secondary-content"
-                        value="Disconnect"
-                        onClick={() => {
-                            setHost(undefined);
-                            setPort(undefined);
-                        }}
-                    />
-                </form>
 
-                <div class="absolute right-5 top-5 w-fit min-w-10">
-                    <select
-                        class="select select-bordered select-primary rounded-md border-2"
-                        onChange={(e) => setStyle(e.target.value)}
-                    >
-                        <option selected value={OPEN_STREET_MAP}>
-                            OpenStreetMap
-                        </option>
-                        <option value={TOPO_V2}>Topo v2</option>
-                        <option value={SATELLITE}>Satellite</option>
-                    </select>
-                </div>
+                <ConnectionForm class="absolute left-5 top-5 bg-primary" setHost={setHost} setPort={setPort} />
+
+                <MapStyleSelection
+                    class="absolute right-5 top-5 w-fit min-w-10"
+                    setStyle={setStyle}
+                    options={{
+                        OpenStreetMap: OPEN_STREET_MAP,
+                        "Topo v2": TOPO_V2,
+                        Satellite: SATELLITE,
+                    }}
+                />
 
                 <div class="absolute bottom-5 left-5 h-fit w-fit rounded-md bg-neutral p-2">
-                    <table class="table table-sm w-64 table-auto text-neutral-content">
-                        <tbody>
-                            <tr>
-                                <th scope="row">Points</th>
-                                <td>{data().size}</td>
-                            </tr>
-                            <tr>
-                                <th scope="row">Longitude</th>
-                                <td>{viewport().center?.lng}</td>
-                            </tr>
-                            <tr>
-                                <th scope="row">Latitude</th>
-                                <td>{viewport().center?.lat}</td>
-                            </tr>
-                            <tr>
-                                <th scope="row">Zoom</th>
-                                <td>{viewport().zoom}</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <StatsTable
+                        points={data().size}
+                        longitude={viewport().center?.lng}
+                        latitude={viewport().center?.lat}
+                        zoom={viewport().zoom}
+                    />
                 </div>
             </MapGL>
         </main>
     );
+    //#endregion
 }
 
 export default App;
+//#endregion
+
+//#region ConnectionForm
+/**
+ * @param {{
+ *      class?: string,
+ *      setHost: Setter<string | undefined>,
+ *      setPort: Setter<number | undefined>,
+ * }} props
+ * @returns {JSXElement}
+ */
+function ConnectionForm(props) {
+    return (
+        <form
+            class={twMerge("form-control grid grid-cols-2 grid-rows-3 gap-2 rounded-md p-2", props.class)}
+            onSubmit={(e) => {
+                e.preventDefault();
+                /** @type {string | undefined} */
+                const host = e.currentTarget.host.value;
+                /** @type {number | undefined} */
+                const port = e.currentTarget.port.value;
+                props.setHost(host ? host : "localhost");
+                props.setPort(port ? port : 8080);
+            }}
+        >
+            <label
+                for="host"
+                class="input input-bordered input-primary col-span-2 flex items-center gap-2 text-primary-content"
+            >
+                Host:
+                <input id="host" class="grow" type="text" placeholder="localhost" />
+            </label>
+            <label
+                for="port"
+                class="input input-bordered input-primary col-span-2 flex items-center gap-2 text-primary-content"
+            >
+                Port:
+                <input id="port" class="grow" type="number" min={1} max={65535} placeholder="8080" />
+            </label>
+            <input type="submit" class="btn btn-secondary col-span-1 text-secondary-content" value="Connect" />
+            <input
+                type="reset"
+                class="btn btn-secondary col-span-1 text-secondary-content"
+                value="Disconnect"
+                onClick={() => {
+                    props.setHost(undefined);
+                    props.setPort(undefined);
+                }}
+            />
+        </form>
+    );
+}
+//#endregion
+
+//#region MapStyleSelection
+/**
+ * @param {{
+ *      class?: string,
+ *      setStyle: Setter<string>,
+ *      options: Record<string, string>
+ * }} props
+ * @returns {JSXElement}
+ */
+function MapStyleSelection(props) {
+    return (
+        <select
+            class={twMerge("select select-bordered select-primary rounded-md border-2", props.class)}
+            onChange={(e) => props.setStyle(e.target.value)}
+        >
+            <For each={Object.entries(props.options)}>{([name, value]) => <option value={value}>{name}</option>}</For>
+        </select>
+    );
+}
+//#endregion
+
+//#region StatsTable
+/**
+ * @param {{
+ *      points: number,
+ *      longitude: number,
+ *      latitude: number,
+ *      zoom: number,
+ * }} props
+ * @returns {JSXElement}
+ */
+function StatsTable(props) {
+    return (
+        <table class="table table-sm w-64 table-auto text-neutral-content">
+            <tbody>
+                <tr>
+                    <th scope="row">Points</th>
+                    <td>{props.points}</td>
+                </tr>
+                <tr>
+                    <th scope="row">Longitude</th>
+                    <td>{props.longitude}</td>
+                </tr>
+                <tr>
+                    <th scope="row">Latitude</th>
+                    <td>{props.latitude}</td>
+                </tr>
+                <tr>
+                    <th scope="row">Zoom</th>
+                    <td>{props.zoom}</td>
+                </tr>
+            </tbody>
+        </table>
+    );
+}
+//#endregion
+
+//#region Helper functions
 
 /**
  * @param {Gps} a
@@ -322,3 +390,5 @@ function lerpGps(a, b, t) {
 function lerp(a, b, t) {
     return a + (b - a) * t;
 }
+
+//#endregion

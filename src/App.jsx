@@ -1,5 +1,5 @@
 //#region Imports
-import { For, Index, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { Index, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { webSocket } from "rxjs/webSocket";
 import MapGL, { Marker } from "solid-map-gl";
 import * as maplibre from "maplibre-gl";

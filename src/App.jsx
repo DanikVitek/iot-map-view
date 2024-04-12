@@ -1,11 +1,19 @@
+//#region Imports
 import { For, Index, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { webSocket } from "rxjs/webSocket";
 import MapGL, { Marker } from "solid-map-gl";
 import * as maplibre from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import car from "./assets/car.png";
+import bump from "./assets/bump.png";
+import pothole from "./assets/pothole.png";
 import { twMerge } from "tailwind-merge";
+import { findPeaks, lerp } from "./math";
+import { next, nth } from "./iter";
+import { structEq } from "./util";
+//#endregion
 
+//#region Types
 /** @typedef {import("solid-js").JSXElement} JSXElement */
 /**
  * @typedef {mapboxgl.LngLatLike} LngLatLike
@@ -52,6 +60,7 @@ import { twMerge } from "tailwind-merge";
  *      data_type: string,
  *  }} Message
  */
+//#endregion
 
 const OPEN_STREET_MAP = "https://api.maptiler.com/maps/openstreetmap/style.json?key=dtDYVdcJneIL6GQ3ReDj";
 const TOPO_V2 = "https://api.maptiler.com/maps/topo-v2/style.json?key=dtDYVdcJneIL6GQ3ReDj";
@@ -61,6 +70,9 @@ const INITIAL_VIEWPORT = /** @type {const} @satisfies {Viewport} */ ({
     center: { lat: 30.52013606276688, lng: 50.45045314605352 },
     zoom: 15,
 });
+
+const BASE_ACCELERATION = 16667; // 1g = 9.81 m/s^2 = 16667 units
+const ACCELERATION_UNIT = 6e-5;
 
 //#region App
 /** @returns {JSXElement} */
@@ -92,8 +104,8 @@ function App() {
     /**
      * @function
      * @param {Message} msg
-     * @param {Map<Id, Loc>} prev
-     * @returns {Map<Id, Loc>}
+     * @param {Map<Id, Data>} prev
+     * @returns {Map<Id, Data>}
      */
     const processMessage = (msg, prev) => {
         switch (msg.kind) {
@@ -101,16 +113,10 @@ function App() {
             case "update":
                 if (Array.isArray(msg.id)) {
                     for (let i = 0; i < msg.id.length; i++) {
-                        prev.set(msg.id[i], {
-                            gps: /** @type {Data[]} */ (msg.data)[i].gps,
-                            road_state: /** @type {Data[]} */ (msg.data)[i].road_state,
-                        });
+                        prev.set(msg.id[i], /** @type {Data[]} */ (msg.data)[i]);
                     }
                 } else {
-                    prev.set(msg.id, {
-                        gps: /** @type {Data} */ (msg.data).gps,
-                        road_state: /** @type {Data} */ (msg.data).road_state,
-                    });
+                    prev.set(msg.id, /** @type {Data} */ (msg.data));
                 }
                 return prev;
 
@@ -126,7 +132,7 @@ function App() {
         }
     };
 
-    const [data, setData] = createSignal(/** @type {Map<Id, Loc>} */ (new Map()), {
+    const [data, setData] = createSignal(/** @type {Map<Id, Data>} */ (new Map()), {
         name: "data",
         equals: false,
     });
@@ -141,9 +147,10 @@ function App() {
                         data.text()
                             .then((json) => /** @type {Message} */ (JSON.parse(json)))
                             .then((msg) => {
+                                // console.log(msg);
                                 setData((prev) => processMessage(msg, prev));
                             })
-                            .catch((err) => console.error({ err }));
+                            .catch(console.error);
                     },
                     error: (err) => {
                         if (err instanceof CloseEvent) {
@@ -166,38 +173,122 @@ function App() {
     );
     //#endregion
 
-    //#region Agent marker logic
+    //#region Agent marker
     const [agentMarker, setAgentMarker] = createSignal(/** @type {[LngLatLike, RoadState] | undefined} */ (undefined));
 
     let t = 0;
 
     setInterval(() => {
-        // lerp between first two stored points and set agentMarker. When current lerp is finished, remove the first point.
-
-        const dataIter = data().entries();
-        const firstResult = dataIter.next();
-        const secondResult = dataIter.next();
-        if (firstResult.done || secondResult.done) {
+        const dataIter = data().values();
+        const i = Math.floor(t);
+        const first = nth(dataIter, i);
+        const second = next(dataIter);
+        if (first === undefined || second === undefined) {
             return;
         }
 
-        const [firstId, first] = firstResult.value;
-        const [, second] = secondResult.value;
+        // const [firstId, first] = firstResult;
+        // const [, second] = secondResult;
 
-        const interpolated = lerpGps(first.gps, second.gps, t);
+        const interpolated = lerpGps(first.gps, second.gps, t - i);
 
         setAgentMarker([{ lng: interpolated.longitude, lat: interpolated.latitude }, first.road_state]);
         t += 0.1;
-        if (t >= 1) {
-            t = 0;
-        }
-        if (t === 0) {
-            setData((prev) => {
-                prev.delete(firstId);
-                return prev;
-            });
-        }
+        // if (t >= 1) {
+        //     t = 0;
+        // }
+        // if (t === 0) {
+        //     setData((prev) => {
+        //         prev.delete(firstId);
+        //         return prev;
+        //     });
+        // }
     }, 9);
+    //#endregion
+
+    //#region Road markers
+    /** @typedef {{gps: Gps, state: "bump" | "pothole", z: number}} RoadMarker */
+
+    const roadMarkers = createMemo(
+        /**
+         * @param {RoadMarker[]} prev
+         * @returns {RoadMarker[]}
+         */
+        (prev) => {
+            if (agentMarker() === undefined) {
+                return [];
+            }
+            if (data().size < 15) {
+                return prev;
+            }
+
+            const points = Array.from(data().values());
+            const maximas = findPeaks(
+                points.map((p) => p.accelerometer.z - BASE_ACCELERATION),
+                {
+                    height: 100,
+                    distance: 1,
+                    prominence: 0,
+                    width: 0,
+                }
+            );
+            const minimas = findPeaks(
+                points.map((p) => -p.accelerometer.z + BASE_ACCELERATION),
+                {
+                    height: 200,
+                    distance: 3,
+                    prominence: 0,
+                    width: 0,
+                }
+            );
+
+            /** @type {RoadMarker[]} */
+            const newMarkers = new Array(maximas.peaks.length + minimas.peaks.length);
+
+            let i = 0;
+            let j = 0;
+            while (i < maximas.peaks.length && j < minimas.peaks.length) {
+                if (maximas.peaks[i] < minimas.peaks[j]) {
+                    newMarkers[i + j] = {
+                        gps: points[maximas.peaks[i]].gps,
+                        state: "bump",
+                        z: points[maximas.peaks[i]].accelerometer.z - BASE_ACCELERATION,
+                    };
+                    i++;
+                } else {
+                    newMarkers[i + j] = {
+                        gps: points[minimas.peaks[j]].gps,
+                        state: "pothole",
+                        z: points[minimas.peaks[j]].accelerometer.z - BASE_ACCELERATION,
+                    };
+                    j++;
+                }
+            }
+            while (i < maximas.peaks.length) {
+                newMarkers[i + j] = {
+                    gps: points[maximas.peaks[i]].gps,
+                    state: "bump",
+                    z: points[maximas.peaks[i]].accelerometer.z - BASE_ACCELERATION,
+                };
+                i++;
+            }
+            while (j < minimas.peaks.length) {
+                newMarkers[i + j] = {
+                    gps: points[minimas.peaks[j]].gps,
+                    state: "pothole",
+                    z: points[minimas.peaks[j]].accelerometer.z - BASE_ACCELERATION,
+                };
+                j++;
+            }
+
+            return newMarkers;
+        },
+        /** @type {RoadMarker[]} */ ([]),
+        {
+            name: "roadMarkers",
+            equals: structEq,
+        }
+    );
     //#endregion
 
     const [viewport, setViewport] = createSignal(INITIAL_VIEWPORT);
@@ -218,12 +309,15 @@ function App() {
                 <Show when={agentMarker()}>
                     {
                         /**
-                         * @param {Accessor<[LngLatLike, RoadState]>} lngLat
+                         * @param {Accessor<[LngLatLike, RoadState]>} agentMarker
                          * @returns {JSXElement}
                          */
-                        (lngLat) => (
+                        (agentMarker) => (
                             <Marker
-                                lngLat={lngLat()[0]}
+                                lngLat={agentMarker()[0]}
+                                popup={{
+                                    closeOnMove: false,
+                                }}
                                 options={{
                                     element: /** @type {HTMLImageElement} */ (<img src={car} width={40} height={63} />),
                                     offset: [0, -31],
@@ -232,6 +326,25 @@ function App() {
                         )
                     }
                 </Show>
+
+                <Index each={roadMarkers()}>
+                    {(roadMarker, index) => (
+                        <Marker
+                            data-index={index}
+                            lngLat={{ lng: roadMarker().gps.longitude, lat: roadMarker().gps.latitude }}
+                            popup={{
+                                closeOnMove: false,
+                            }}
+                            options={{
+                                element: /** @type {HTMLImageElement} */ (
+                                    <img src={roadMarker().state === "bump" ? bump : pothole} width={51} height={51} />
+                                ),
+                            }}
+                        >
+                            {roadMarker().z.toString()}
+                        </Marker>
+                    )}
+                </Index>
 
                 <ConnectionForm class="absolute left-5 top-5 bg-primary" setHost={setHost} setPort={setPort} />
 
@@ -278,9 +391,9 @@ function ConnectionForm(props) {
             onSubmit={(e) => {
                 e.preventDefault();
                 /** @type {string | undefined} */
-                const host = e.currentTarget.host.value;
+                const host = e.currentTarget.host?.value;
                 /** @type {number | undefined} */
-                const port = e.currentTarget.port.value;
+                const port = e.currentTarget.port?.value;
                 props.setHost(host ? host : "localhost");
                 props.setPort(port ? port : 8080);
             }}
@@ -314,7 +427,7 @@ function ConnectionForm(props) {
 }
 //#endregion
 
-//#region MapStyleSelection
+//#region MapStyleSelect
 /**
  * @param {{
  *      class?: string,
@@ -326,6 +439,7 @@ function ConnectionForm(props) {
 function MapStyleSelect(props) {
     return (
         <select
+            name="map-style"
             class={twMerge("select select-bordered select-primary rounded-md border-2", props.class)}
             onChange={(e) => props.setStyle(e.target.value)}
         >
@@ -388,16 +502,6 @@ function lerpGps(a, b, t) {
         latitude: lerp(a.latitude, b.latitude, t),
         longitude: lerp(a.longitude, b.longitude, t),
     };
-}
-
-/**
- * @param {number} a
- * @param {number} b
- * @param {number} t
- * @returns {number}
- */
-function lerp(a, b, t) {
-    return a + (b - a) * t;
 }
 
 //#endregion
